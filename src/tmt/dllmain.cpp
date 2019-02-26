@@ -84,6 +84,8 @@ void CloseBackground() {
 	CloseHandle(CreateThread(nullptr, 0, (LPTHREAD_START_ROUTINE)FreeLibraryAndExitThread, gLibModule, 0, nullptr));
 }
 
+#define VERTICAL_SIZE 70
+
 LRESULT CALLBACK WndProc_TaskBar(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 	static HWND menuOwner;
 
@@ -91,6 +93,19 @@ LRESULT CALLBACK WndProc_TaskBar(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 	case WM_TWEAKER: {
 		if (wParam == TWEAKER_EXIT)
 			CloseBackground();
+#if 0
+		else {
+			RECT rect;
+			GetWindowRect(hwnd, &rect);
+			rect.right = VERTICAL_SIZE;
+			SendMessage(hwnd, WM_SIZING, WMSZ_LEFT, (LPARAM)&rect);
+			SetWindowPos(hwnd, nullptr,
+				rect.left, rect.top,
+				rect.right - rect.left,
+				rect.bottom - rect.top,
+				SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+		}
+#endif
 		return 0;
 	}
 
@@ -153,6 +168,39 @@ LRESULT CALLBACK WndProc_TaskBar(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 	case WM_CONTEXTMENU:
 		menuOwner = (HWND)wParam;
 		break;
+#if 1
+	case WM_SIZING: {
+		// Really bad-bad workaround
+		//LRESULT ret = DefWindowProc(hwnd, uMsg, wParam, lParam);
+		LPRECT lpRect = (LPRECT)lParam;
+		if (lpRect->right > VERTICAL_SIZE) {
+			LONG diff = lpRect->right - VERTICAL_SIZE;
+			if (diff > 10) diff = 10;
+			lpRect->right -= diff;
+		}
+		LRESULT ret = WNDPROC(OldWndProc_TaskBar)(hwnd, uMsg, wParam, lParam);
+		return ret;
+	}
+#endif
+#if 0
+	case WM_SIZE: {
+		//LRESULT ret = DefWindowProc(hwnd, uMsg, wParam, lParam);
+		LRESULT ret = WNDPROC(OldWndProc_TaskBar)(hwnd, uMsg, wParam, lParam);
+		return ret;
+	}
+#endif
+	case WM_GETMINMAXINFO: {
+		LRESULT ret = WNDPROC(OldWndProc_TaskBar)(hwnd, uMsg, wParam, lParam);
+		LPMINMAXINFO lpMMI = (LPMINMAXINFO)lParam;
+		lpMMI->ptMinTrackSize.x = VERTICAL_SIZE;
+		return ret;
+	}
+#if 0
+	case WM_NCCALCSIZE: {
+		LRESULT ret = DefWindowProc(hwnd, uMsg, wParam, lParam);
+		return ret;
+	}
+#endif
 	}
 
 	return WNDPROC(OldWndProc_TaskBar)(hwnd, uMsg, wParam, lParam);
@@ -288,6 +336,9 @@ extern "C" _declspec(dllexport) DWORD  __cdecl  __TweakerInit(LPVOID param) {
 		}
 	}
 
+#if 0
+	PostMessage(hWnd_TaskBar, WM_TWEAKER, TWEAKER_EXIT+1, 0);
+#endif
 	// Network & Volumn
 	HWND hPNIHiddenWnd = FindWindowA("PNIHiddenWnd", nullptr);
 	EnumWindows(EnumWindowsCallBack, GetWindowThreadProcessId(hPNIHiddenWnd, NULL));
