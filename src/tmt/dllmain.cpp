@@ -63,6 +63,9 @@ void CloseBackground() {
 	// Disable the hooks
 	BOOL flag = MH_DisableHook(&TrackPopupMenu);
 	flag |= MH_DisableHook(&TrackPopupMenuEx);
+#if HOOK_MULDIV
+	flag |= MH_DisableHook(&MulDiv);
+#endif
 	flag |= MH_Uninitialize();	// Uninitialize MinHook.
 
 	if (flag != MH_OK)
@@ -153,6 +156,47 @@ LRESULT CALLBACK WndProc_TaskBar(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPa
 	case WM_CONTEXTMENU:
 		menuOwner = (HWND)wParam;
 		break;
+
+	case WM_SIZING: {
+		LPRECT lpRect = (LPRECT)lParam;
+#if 0
+		RECT oldRect;
+		memcpy(&oldRect, lpRect, sizeof(RECT));
+#endif
+		// Failed attempts to fool bounds check:
+		//wParam = WMSZ_LEFT;
+		//wParam = WMSZ_BOTTOM;
+		//lpRect->right -= 10;
+
+		// Working workaround to fool bounds check when using vertical task-bar on the left:
+		if (wParam == WMSZ_RIGHT) {
+			lpRect->left -= 30;
+		}
+		LRESULT ret = WNDPROC(OldWndProc_TaskBar)(hwnd, uMsg, wParam, lParam);
+#if 0
+		TCHAR msg[512];
+		wsprintf(msg, L"Shell_TrayWnd: WM_SIZING: edge=%d rect=(l:%d, r:%d, t:%d, b:%d) -> (l:%d, r:%d, t:%d, b:%d) --> %d",
+			wParam,
+			oldRect.left, oldRect.right, oldRect.top, oldRect.bottom,
+			lpRect->left, lpRect->right, lpRect->top, lpRect->bottom,
+			ret);
+		OutputDebugString(msg);
+		//lpRect->right = oldRect.right;
+		//ret = 0;
+#endif
+		return ret;
+	}
+
+	case WM_GETMINMAXINFO: {
+		LRESULT ret = WNDPROC(OldWndProc_TaskBar)(hwnd, uMsg, wParam, lParam);
+		LPMINMAXINFO lpMinMaxInfo = (LPMINMAXINFO)lParam;
+		TCHAR msg[512];
+		wsprintf(msg, L"Shell_TrayWnd: WM_GETMINMAXINFO: ptMinTrackSize %d x %d",
+			lpMinMaxInfo->ptMinTrackSize.x, lpMinMaxInfo->ptMaxTrackSize.y);
+		OutputDebugString(msg);
+		return ret;
+	}
+
 	}
 
 	return WNDPROC(OldWndProc_TaskBar)(hwnd, uMsg, wParam, lParam);
@@ -200,10 +244,16 @@ void ProcessResultIfPossible(BOOL ret, HMENU hMenu) {
 
 typedef BOOL (WINAPI *FPT_TrackPopupMenu)(HMENU, UINT, int, int, int, HWND, CONST RECT*);
 typedef BOOL(WINAPI *FPT_TrackPopupMenuEx)(HMENU, UINT, int, int, HWND, LPTPMPARAMS);
+#if HOOK_MULDIV
+typedef int(WINAPI *FPT_MulDiv)(int, int, int);
+#endif
 
 // Pointer for calling original MessageBoxW.
 FPT_TrackPopupMenu fpTrackPopupMenu;
 FPT_TrackPopupMenuEx fpTrackPopupMenuEx;
+#if HOOK_MULDIV
+FPT_MulDiv fpMulDiv;
+#endif
 
 // Detour function which overrides TrackPopupMenu.
 BOOL WINAPI HookedTrackPopupMenu(HMENU hMenu, UINT uFlags, int x, int y, int nReserved, HWND hWnd, CONST RECT* prcRect) {
@@ -228,6 +278,38 @@ BOOL WINAPI HookedTrackPopupMenuEx(HMENU hMenu, UINT uFlags, int x, int y, HWND 
 	return ret;
 }
 
+#if HOOK_MULDIV
+int WINAPI HookedMulDiv(int nNumber, int nNumerator, int nDenominator) {
+	int ret = fpMulDiv(nNumber, nNumerator, nDenominator);
+#if 0
+	int oret = ret;
+
+	// NOTE: This was tested on 125% DPI scaling, hence 120 denominators instead of 96.
+	// [10304] MulDiv: 62 * 120 / 120 = 62
+	// [10304] MulDiv: 97 * 120 / 120 = 97
+	if ((nNumber == 62 || nNumber == 65 || nNumber == 97) && nDenominator == 120) {
+		ret = 10;
+	}
+	// [10304] MulDiv: 94 * 96 / 120 = 75
+	else if (nNumber == 94 && nNumerator == 96 && nDenominator == 120) {
+		ret = 50;
+	}
+	// [10304] MulDiv: 54 * 96 / 120 = 43
+	else if (nNumber == 54 && nNumerator == 96 && nDenominator == 120) {
+		ret = 20;
+	}
+
+
+	TCHAR msg[512];
+	if (oret != ret)
+		wsprintf(msg, L"Shell_TrayWnd: MulDiv: %d * %d / %d = %d --> %d", nNumber, nNumerator, nDenominator, oret, ret);
+	else
+		wsprintf(msg, L"Shell_TrayWnd: MulDiv: %d * %d / %d = %d", nNumber, nNumerator, nDenominator, ret);
+	OutputDebugString(msg);
+#endif
+	return ret;
+}
+#endif
 
 BOOL CALLBACK EnumWindowsCallBack(HWND hwnd, LPARAM lParam) {
 	if (GetWindowThreadProcessId(hwnd, NULL) == (DWORD)lParam) {
@@ -257,12 +339,19 @@ extern "C" _declspec(dllexport) DWORD  __cdecl  __TweakerInit(LPVOID param) {
 		reinterpret_cast<LPVOID*>(&fpTrackPopupMenu));
 	flag |= MH_CreateHook(&TrackPopupMenuEx, &HookedTrackPopupMenuEx,
 		reinterpret_cast<LPVOID*>(&fpTrackPopupMenuEx));
+#if HOOK_MULDIV
+	flag |= MH_CreateHook(&MulDiv, &HookedMulDiv,
+		reinterpret_cast<LPVOID*>(&fpMulDiv));
+#endif
 	if (flag != MH_OK)
 		MessageBoxW(0, L"Unable to create hooks!", L"Fatal Error", MB_ICONERROR);
 
 	// Enable the hook
 	flag = MH_EnableHook(&TrackPopupMenu);
 	flag |= MH_EnableHook(&TrackPopupMenuEx);
+#if HOOK_MULDIV
+	flag |= MH_EnableHook(&MulDiv);
+#endif
 	if (flag != MH_OK)
 		MessageBoxW(0, L"Failed to enable hooks!", L"Fatal Error", MB_ICONERROR);
 
